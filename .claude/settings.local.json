@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"C:/Users/drx40/Desktop/Proyecto Nexus/infra/n8n\")",
+      "Bash(touch \"C:/Users/drx40/Desktop/Proyecto Nexus/infra/n8n/.gitkeep\")"
+    ]
+  }
+}
