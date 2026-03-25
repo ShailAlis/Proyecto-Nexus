@@ -1,0 +1,71 @@
+# ============================================================
+# NEXUS — .gitignore
+# ============================================================
+
+# --- Secrets y entorno ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+CLAUDE.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# --- Node / n8n local ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm
+
+# --- Docker ---
+# No ignorar docker-compose.yml ni Dockerfile, solo datos de volúmenes locales
+infra/volumes/
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Datos temporales / outputs locales ---
+tmp/
+temp/
+.cache/
+
+# --- n8n exportaciones locales (no versionadas por defecto) ---
+n8n-exports/
