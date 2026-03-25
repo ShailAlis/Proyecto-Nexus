@@ -20,6 +20,7 @@ def save_agent_result(
     model_used: str,
     tokens_used: int | None = None,
 ) -> None:
+    job_id = str(job_id).lstrip('=').strip()
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -36,6 +37,7 @@ def save_agent_result(
 
 
 def update_job_status(job_id: str, status: str) -> None:
+    job_id = str(job_id).lstrip('=').strip()
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -49,6 +51,7 @@ def update_job_status(job_id: str, status: str) -> None:
 
 
 def get_job_status(job_id: str) -> dict | None:
+    job_id = str(job_id).lstrip('=').strip()
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -83,6 +86,7 @@ def save_decision(
     decided_by: str,
     rationale: str | None = None,
 ) -> None:
+    job_id = str(job_id).lstrip('=').strip()
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
