@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import logging
+import os
+import re
+
+import httpx
+
+from db import save_decision, update_job_status
+
+logger = logging.getLogger("nexus.approval")
+
+JOB_ID_PATTERN = re.compile(r"\*\*Job:\*\*\s*`([^`]+)`")
+
+
+def extract_job_id_from_message(message_content: str) -> str | None:
+    """Extrae el job_id del mensaje de aprobación de Discord."""
+    match = JOB_ID_PATTERN.search(message_content)
+    return match.group(1) if match else None
+
+
+async def _notify_n8n(job_id: str, status: str) -> None:
+    """Envía callback a n8n con el resultado de la decisión."""
+    n8n_url = os.getenv("N8N_WEBHOOK_URL")
+    if not n8n_url:
+        logger.warning("N8N_WEBHOOK_URL no configurado, skip callback")
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                n8n_url,
+                json={"job_id": job_id, "result": {}, "approval": status},
+                timeout=10,
+            )
+    except Exception:
+        logger.exception("Error notificando a n8n para job %s", job_id)
+
+
+async def _notify_channel(channel_env: str, message: str) -> None:
+    """Envía un mensaje a un canal de Discord por su ID (variable de entorno)."""
+    from discord_bot import client
+
+    channel_id = os.getenv(channel_env)
+    if not channel_id:
+        return
+    channel = client.get_channel(int(channel_id))
+    if channel:
+        await channel.send(message)
+
+
+async def approve_job(job_id: str, decided_by: str = "unknown") -> None:
+    """Aprueba un job: actualiza BD, registra decisión, notifica n8n."""
+    update_job_status(job_id, "approved")
+    save_decision(
+        job_id=job_id,
+        decision_type="approved",
+        decided_by=decided_by,
+        rationale="Aprobado vía Discord",
+    )
+    await _notify_n8n(job_id, "approved")
+    logger.info("Job %s aprobado por %s", job_id, decided_by)
+
+
+async def reject_job(
+    job_id: str, decided_by: str = "unknown", reason: str = "Sin motivo especificado"
+) -> None:
+    """Rechaza un job: actualiza BD, registra decisión, notifica canal de errores y n8n."""
+    update_job_status(job_id, "rejected")
+    save_decision(
+        job_id=job_id,
+        decision_type="rejected",
+        decided_by=decided_by,
+        rationale=reason,
+    )
+    await _notify_channel(
+        "DISCORD_ERRORS_CHANNEL_ID",
+        f"\u26a0\ufe0f **Job rechazado:** `{job_id}`\n**Por:** {decided_by}\n**Motivo:** {reason}",
+    )
+    await _notify_n8n(job_id, "rejected")
+    logger.info("Job %s rechazado por %s: %s", job_id, decided_by, reason)
+
+
+async def iterate_job(
+    job_id: str, decided_by: str = "unknown", comment: str = ""
+) -> None:
+    """Envía un job a iteración: actualiza BD, registra comentario, relanza grafo."""
+    update_job_status(job_id, "pending")
+    save_decision(
+        job_id=job_id,
+        decision_type="iterate",
+        decided_by=decided_by,
+        rationale=comment,
+    )
+
+    # Relanzar el grafo con contexto adicional
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://localhost:8000/webhook/callback",
+                json={
+                    "job_id": job_id,
+                    "result": {"iterate_comment": comment},
+                    "approval": "iterate",
+                    "decided_by": decided_by,
+                },
+                timeout=10,
+            )
+    except Exception:
+        logger.exception("Error relanzando grafo para job %s", job_id)
+
+    logger.info("Job %s enviado a iteración por %s: %s", job_id, decided_by, comment)

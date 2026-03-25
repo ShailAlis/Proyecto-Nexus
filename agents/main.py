@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
+import threading
 import uuid
-from contextlib import asynccontextmanager
 
 import redis
 from dotenv import load_dotenv
@@ -15,19 +17,43 @@ from graph.state import NexusState
 
 load_dotenv()
 
+logger = logging.getLogger("nexus.main")
+
 redis_client: redis.Redis | None = None
+_discord_thread: threading.Thread | None = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global redis_client
-    redis_client = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
-    yield
-    if redis_client:
-        redis_client.close()
+def _start_discord_bot() -> None:
+    print(">>> _start_discord_bot iniciado")
+    try:
+        from discord_bot import run_bot_in_loop
+        print(">>> Importado discord_bot OK")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        print(">>> Loop creado, arrancando...")
+        run_bot_in_loop(loop)
+    except Exception as e:
+        print(f">>> ERROR CRITICO: {e}")
+        import traceback
+        traceback.print_exc()
 
 
-app = FastAPI(title="NEXUS Agents", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="NEXUS Agents", version="0.1.0")
+
+
+@app.on_event("startup")
+async def startup_event():
+    print(">>> startup_event ejecutándose")
+    global _discord_thread, redis_client
+    redis_client = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"))
+    token = os.getenv("DISCORD_BOT_TOKEN")
+    print(f">>> Token Discord presente: {bool(token)}")
+    if token:
+        _discord_thread = threading.Thread(target=_start_discord_bot, daemon=True)
+        _discord_thread.start()
+        print(">>> Discord thread lanzado")
+    else:
+        print(">>> Sin token Discord")
 
 
 # ---------- Schemas ----------
@@ -49,6 +75,12 @@ class CallbackPayload(BaseModel):
     result: dict
     approval: str | None = None
     decided_by: str | None = None
+
+
+class ApprovalNotification(BaseModel):
+    job_id: str
+    approval_type: str
+    summary: str
 
 
 # ---------- Endpoints ----------
@@ -108,3 +140,22 @@ async def webhook_callback(payload: CallbackPayload):
 
     # TODO: notificar a n8n vía webhook cuando esté configurado
     return {"received": True, "job_id": payload.job_id}
+
+
+@app.post("/notify/approval-required")
+async def notify_approval_required(notification: ApprovalNotification):
+    """Envía solicitud de aprobación al canal de Discord."""
+    from discord_bot import client, send_approval_request
+
+    if not client.is_ready():
+        raise HTTPException(status_code=503, detail="Discord bot not ready")
+
+    asyncio.run_coroutine_threadsafe(
+        send_approval_request(
+            job_id=notification.job_id,
+            approval_type=notification.approval_type,
+            summary=notification.summary,
+        ),
+        client.loop,
+    )
+    return {"sent": True, "job_id": notification.job_id}
