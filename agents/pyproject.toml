@@ -38,3 +38,4 @@ line-length = 100
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=. --cov-report=term-missing --cov-fail-under=35"
+
