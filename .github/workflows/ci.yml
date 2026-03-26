@@ -32,11 +32,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run hadolint
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: agents/Dockerfile
-          failure-threshold: warning
+      - name: Install hadolint
+        run: |
+          wget -qO /usr/local/bin/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+
+      - name: Lint Dockerfiles
+        run: hadolint agents/Dockerfile
 
   test-python:
     name: Tests (pytest + coverage)
