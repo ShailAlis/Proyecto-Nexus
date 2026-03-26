@@ -1,0 +1,95 @@
+# NEXUS PR — Crea PR automático tras aprobación final del job.
+# NO hace merge automático. NO hace deploy.
+
+name: NEXUS - Create PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "ID del job NEXUS"
+        required: true
+        type: string
+      jira_issue:
+        description: "Clave del issue Jira (ej: NEXUS-42)"
+        required: true
+        type: string
+      branch_name:
+        description: "Nombre de la rama (sin prefijo feature/)"
+        required: true
+        type: string
+      pr_title:
+        description: "Título del PR"
+        required: true
+        type: string
+      pr_body:
+        description: "Descripción del PR"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  create-pr:
+    name: Create feature PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "NEXUS Bot"
+          git config user.email "nexus-bot@noreply.github.com"
+
+      - name: Create feature branch
+        run: |
+          git checkout -b "feature/nexus-${{ github.event.inputs.job_id }}"
+          git push origin "feature/nexus-${{ github.event.inputs.job_id }}"
+
+      - name: Create Pull Request
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ secrets.GIT_TOKEN }}
+        run: |
+          PR_URL=$(gh pr create \
+            --base develop \
+            --head "feature/nexus-${{ github.event.inputs.job_id }}" \
+            --title "${{ github.event.inputs.pr_title }}" \
+            --body "$(cat <<'EOF'
+          ## NEXUS Generated PR
+
+          **Job ID:** `${{ github.event.inputs.job_id }}`
+          **Jira Issue:** ${{ github.event.inputs.jira_issue }}
+
+          ${{ github.event.inputs.pr_body }}
+
+          ---
+          *PR generado automáticamente por NEXUS. Requiere revisión y aprobación humana antes del merge.*
+          EOF
+          )" \
+            --label "nexus-generated")
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GIT_TOKEN }}
+        run: |
+          gh pr comment "${{ steps.create-pr.outputs.pr_url }}" --body "$(cat <<'EOF'
+          ### NEXUS Job Summary
+
+          | Campo | Valor |
+          |-------|-------|
+          | **Job ID** | `${{ github.event.inputs.job_id }}` |
+          | **Jira Issue** | [${{ github.event.inputs.jira_issue }}](https://jira.atlassian.net/browse/${{ github.event.inputs.jira_issue }}) |
+          | **Rama** | `feature/nexus-${{ github.event.inputs.job_id }}` |
+          | **Target** | `develop` |
+
+          > Este PR fue generado por el sistema multiagente NEXUS tras completar las 3 fases de aprobacion humana.
+          > **No se realizara merge automatico.** Un revisor humano debe aprobar antes de mergear.
+          EOF
+          )"

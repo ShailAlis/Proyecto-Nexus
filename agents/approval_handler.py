@@ -36,6 +36,38 @@ async def _notify_n8n(job_id: str, status: str) -> None:
         logger.exception("Error notificando a n8n para job %s", job_id)
 
 
+async def _trigger_pr_workflow(job_id: str, jira_issue: str, summary: str) -> None:
+    """Dispara el workflow nexus-pr.yml via GitHub API workflow_dispatch."""
+    github_token = os.getenv("GIT_TOKEN")
+    github_repo = os.getenv("GIT_REPO")
+    if not github_token or not github_repo:
+        logger.warning("GITHUB_TOKEN o GITHUB_REPO no configurados, skip PR workflow")
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.github.com/repos/{github_repo}/actions/workflows/nexus-pr.yml/dispatches",
+                headers={
+                    "Authorization": f"Bearer {github_token}",
+                    "Accept": "application/vnd.github.v3+json",
+                },
+                json={
+                    "ref": "develop",
+                    "inputs": {
+                        "job_id": job_id,
+                        "jira_issue": jira_issue,
+                        "branch_name": job_id,
+                        "pr_title": f"feat({jira_issue}): {summary[:60]}",
+                        "pr_body": f"Job NEXUS `{job_id}` completado y aprobado.\n\nResumen: {summary}",
+                    },
+                },
+                timeout=15,
+            )
+        logger.info("Workflow nexus-pr.yml disparado para job %s", job_id)
+    except Exception:
+        logger.exception("Error disparando workflow PR para job %s", job_id)
+
+
 async def _notify_channel(channel_env: str, message: str) -> None:
     """Envía un mensaje a un canal de Discord por su ID (variable de entorno)."""
     from discord_bot import bot
@@ -59,29 +91,36 @@ async def approve_job(job_id: str, user_id: str, approval_type: str = "architect
     )
     logger.info("Job %s aprobado por %s (tipo: %s)", job_id, user_id, approval_type)
 
-    # Obtener datos del job para relanzar el grafo
+    # Obtener datos del job
     job_data = get_job_data(job_id)
     if not job_data:
-        logger.error("No se encontraron datos para job %s, no se puede relanzar", job_id)
+        logger.error("No se encontraron datos para job %s, no se puede continuar", job_id)
+        await _notify_n8n(job_id, approval_type)
         return
 
-    # Relanzar grafo en phase=development
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                "http://agents:8000/run",
-                json={
-                    "job_id": job_id,
-                    "jira_issue": job_data["jira_issue"],
-                    "description": job_data["analyst_output"].get("scope", ""),
-                    "phase": "development",
-                    "analyst_output": job_data["analyst_output"],
-                },
-                timeout=10,
-            )
-        logger.info("Grafo relanzado en phase=development para job %s", job_id)
-    except Exception:
-        logger.exception("Error relanzando grafo para job %s", job_id)
+    if approval_type == "architecture":
+        # Aprobación de análisis → relanzar grafo en phase=development
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "http://agents:8000/run",
+                    json={
+                        "job_id": job_id,
+                        "jira_issue": job_data["jira_issue"],
+                        "description": job_data["analyst_output"].get("scope", ""),
+                        "phase": "development",
+                        "analyst_output": job_data["analyst_output"],
+                    },
+                    timeout=10,
+                )
+            logger.info("Grafo relanzado en phase=development para job %s", job_id)
+        except Exception:
+            logger.exception("Error relanzando grafo para job %s", job_id)
+
+    elif approval_type == "visual":
+        # Aprobación final → disparar workflow de PR en GitHub
+        scope = job_data["analyst_output"].get("scope", "Cambios generados por NEXUS")
+        await _trigger_pr_workflow(job_id, job_data["jira_issue"], scope)
 
     await _notify_n8n(job_id, approval_type)
 

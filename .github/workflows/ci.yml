@@ -1,3 +1,6 @@
+# NEXUS CI — No auto-deploy policy
+# Este pipeline solo valida calidad de código. NUNCA despliega a ningún entorno.
+
 name: CI
 
 on:
@@ -5,8 +8,8 @@ on:
     branches: [main, develop]
 
 jobs:
-  lint:
-    name: Lint (ruff)
+  lint-python:
+    name: Lint Python (ruff)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +22,24 @@ jobs:
         run: pip install ruff
 
       - name: Run ruff
-        run: ruff check .
+        run: ruff check agents/
 
-  test:
-    name: Tests (pytest)
+  lint-docker:
+    name: Lint Dockerfiles (hadolint)
     runs-on: ubuntu-latest
-    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: agents/Dockerfile
+          failure-threshold: warning
+
+  test-python:
+    name: Tests (pytest + coverage)
+    runs-on: ubuntu-latest
+    needs: [lint-python]
     steps:
       - uses: actions/checkout@v4
 
@@ -35,14 +50,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-          pip install pytest
+          pip install -e "agents/[dev]" 2>/dev/null || true
+          pip install pytest pytest-cov pytest-asyncio
+          pip install -r agents/requirements.txt 2>/dev/null || true
+          cd agents && pip install -e ".[dev]" 2>/dev/null || pip install . 2>/dev/null || true
 
-      - name: Run pytest
+      - name: Run pytest with coverage
         run: |
-          if find . -name "test_*.py" -o -name "*_test.py" | grep -q .; then
-            pytest -v
+          cd agents
+          if find tests/ -name "test_*.py" -o -name "*_test.py" 2>/dev/null | grep -q .; then
+            pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=70
           else
             echo "No test files found, skipping."
           fi

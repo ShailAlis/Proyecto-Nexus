@@ -1,0 +1,67 @@
+# NEXUS — Notifica resultado de CI a Discord via webhook.
+
+name: Notify Discord
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  notify:
+    name: Send Discord notification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set status emoji
+        id: status
+        run: |
+          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            echo "emoji=✅" >> "$GITHUB_OUTPUT"
+            echo "color=3066993" >> "$GITHUB_OUTPUT"
+            echo "text=CI passed" >> "$GITHUB_OUTPUT"
+          else
+            echo "emoji=❌" >> "$GITHUB_OUTPUT"
+            echo "color=15158332" >> "$GITHUB_OUTPUT"
+            echo "text=CI failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send Discord webhook
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL not configured, skipping"
+            exit 0
+          fi
+
+          curl -s -H "Content-Type: application/json" \
+            -X POST "$DISCORD_WEBHOOK_URL" \
+            -d "$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "${{ steps.status.outputs.emoji }} NEXUS CI — ${{ steps.status.outputs.text }}",
+              "color": ${{ steps.status.outputs.color }},
+              "fields": [
+                {
+                  "name": "Branch",
+                  "value": "\`${{ github.event.workflow_run.head_branch }}\`",
+                  "inline": true
+                },
+                {
+                  "name": "Conclusion",
+                  "value": "${{ github.event.workflow_run.conclusion }}",
+                  "inline": true
+                },
+                {
+                  "name": "Run",
+                  "value": "[Ver detalles](${{ github.event.workflow_run.html_url }})",
+                  "inline": true
+                }
+              ],
+              "footer": {
+                "text": "NEXUS CI Pipeline"
+              }
+            }]
+          }
+          EOF
+          )"
