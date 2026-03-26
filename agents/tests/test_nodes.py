@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from graph.state import NexusState
 
@@ -81,12 +81,14 @@ def test_designer_node():
 def test_reviewer_node_consensus():
     with patch("graph.nodes.reviewer.ChatOllama") as mock_ollama_class, \
          patch("graph.nodes.reviewer.ChatAnthropic") as mock_anthropic_class, \
-         patch("graph.nodes.reviewer.save_agent_result") as mock_save:
+         patch("graph.nodes.reviewer.save_agent_result") as mock_save, \
+         patch("graph.nodes.reviewer.httpx.post") as mock_http:
 
         mock_ollama = MagicMock()
         mock_anthropic = MagicMock()
         mock_ollama_class.return_value = mock_ollama
         mock_anthropic_class.return_value = mock_anthropic
+        mock_http.return_value = MagicMock(status_code=200)
 
         ollama_response = MagicMock()
         ollama_response.content = '{"review": "Good implementation", "issues": [], "approved": true}'
@@ -104,17 +106,21 @@ def test_reviewer_node_consensus():
 
         assert result["reviewer_output"] != {}
         assert mock_save.called
+        assert result["approval_required"] is True
+        assert result["approval_type"] == "visual"
 
 
 def test_reviewer_node_no_consensus():
     with patch("graph.nodes.reviewer.ChatOllama") as mock_ollama_class, \
          patch("graph.nodes.reviewer.ChatAnthropic") as mock_anthropic_class, \
-         patch("graph.nodes.reviewer.save_agent_result") as mock_save:
+         patch("graph.nodes.reviewer.save_agent_result") as mock_save, \
+         patch("graph.nodes.reviewer.httpx.post") as mock_http:
 
         mock_ollama = MagicMock()
         mock_anthropic = MagicMock()
         mock_ollama_class.return_value = mock_ollama
         mock_anthropic_class.return_value = mock_anthropic
+        mock_http.return_value = MagicMock(status_code=200)
 
         ollama_response = MagicMock()
         ollama_response.content = '{"review": "Has security issues", "issues": ["SQL injection risk"], "approved": false}'
@@ -131,6 +137,7 @@ def test_reviewer_node_no_consensus():
         result = reviewer_node(state)
 
         assert result["approval_required"] is True
+        assert result["approval_type"] == "visual"
 
 
 def test_extract_json_with_think_tags():
@@ -157,3 +164,65 @@ def test_nexus_state_structure():
     assert "analyst_output" in state
     assert "reviewer_output" in state
     assert state["approval_required"] is False
+
+
+async def test_approval_handler_iterate_relaunches_development():
+    from approval_handler import iterate_job
+
+    job_data = {
+        "jira_issue": "NEXUS-TEST",
+        "analyst_output": {
+            "original_description": "Crear endpoint GET /api/jobs",
+            "scope": "Crear endpoint GET /api/jobs con paginación",
+        },
+    }
+
+    with patch("approval_handler.get_job_data", return_value=job_data), \
+         patch("approval_handler.update_job_status") as mock_update, \
+         patch("approval_handler.save_decision") as mock_save, \
+         patch("approval_handler.httpx.AsyncClient") as mock_client_cls:
+
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post = AsyncMock(return_value=MagicMock())
+
+        await iterate_job("job-123", "user-1", "Revisar requisitos")
+
+    mock_update.assert_called_once_with("job-123", "pending")
+    mock_save.assert_not_called()
+    mock_client.post.assert_awaited_once()
+    assert mock_client.post.call_args.args[0] == "http://agents:8000/run"
+    assert mock_client.post.call_args.kwargs["json"]["phase"] == "development"
+    assert mock_client.post.call_args.kwargs["json"]["description"] == "Crear endpoint GET /api/jobs"
+    assert mock_client.post.call_args.kwargs["json"]["iteration_comment"] == "Revisar requisitos"
+
+
+async def test_approval_handler_initial_approval_relaunches_development():
+    from approval_handler import approve_job
+
+    job_data = {
+        "jira_issue": "NEXUS-TEST",
+        "analyst_output": {
+            "original_description": "Crear endpoint GET /api/jobs",
+            "scope": "Crear endpoint GET /api/jobs con paginación",
+        },
+    }
+
+    with patch("approval_handler.get_job_data", return_value=job_data), \
+         patch("approval_handler._get_latest_agent_output", return_value={}), \
+         patch("approval_handler.update_job_status") as mock_update, \
+         patch("approval_handler.save_decision") as mock_save, \
+         patch("approval_handler._notify_n8n") as mock_notify, \
+         patch("approval_handler.httpx.AsyncClient") as mock_client_cls:
+
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post = AsyncMock(return_value=MagicMock())
+
+        await approve_job("job-123", "user-1", "architecture")
+
+    mock_save.assert_called_once()
+    mock_update.assert_called_once_with("job-123", "approved")
+    mock_notify.assert_awaited()
+    assert mock_client.post.await_count == 1
+    assert mock_client.post.call_args.args[0] == "http://agents:8000/run"

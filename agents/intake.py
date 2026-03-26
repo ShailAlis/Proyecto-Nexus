@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -35,10 +36,16 @@ def _extract_json(text: str) -> dict[str, Any]:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
     if match:
-        return json.loads(match.group(1))
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return {}
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
-        return json.loads(match.group())
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            return {}
     return {}
 
 
@@ -51,7 +58,7 @@ def _format_transcript(transcript: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def analyze_request(transcript: list[dict[str, str]]) -> dict[str, Any]:
+def _run_analysis(transcript: list[dict[str, str]]) -> dict[str, Any]:
     llm = ChatOllama(
         model="deepseek-r1:14b",
         temperature=0.1,
@@ -68,7 +75,11 @@ def analyze_request(transcript: list[dict[str, str]]) -> dict[str, Any]:
         },
     ]
     response = llm.invoke(messages)
-    parsed = _extract_json(response.content if hasattr(response, "content") else str(response))
+    return _extract_json(response.content if hasattr(response, "content") else str(response))
+
+
+async def analyze_request(transcript: list[dict[str, str]]) -> dict[str, Any]:
+    parsed = await asyncio.to_thread(_run_analysis, transcript)
 
     ready = bool(parsed.get("ready"))
     next_question = str(parsed.get("next_question") or "").strip()

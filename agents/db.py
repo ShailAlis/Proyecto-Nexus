@@ -13,6 +13,29 @@ def _get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 
+def _normalize_job_id(job_id: str) -> str:
+    return str(job_id).lstrip("=").strip()
+
+
+def create_job(job_id: str, jira_issue: str, trigger_type: str = "manual") -> None:
+    """Crea el registro maestro del job si todavía no existe."""
+    job_id = _normalize_job_id(job_id)
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO nexus_jobs (job_id, jira_issue, status, trigger_type)
+                VALUES (%s, %s, 'pending', %s)
+                ON CONFLICT (job_id) DO NOTHING
+                """,
+                (job_id, jira_issue, trigger_type),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def save_agent_result(
     job_id: str,
     agent_name: str,
@@ -20,7 +43,7 @@ def save_agent_result(
     model_used: str,
     tokens_used: int | None = None,
 ) -> None:
-    job_id = str(job_id).lstrip('=').strip()
+    job_id = _normalize_job_id(job_id)
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -37,7 +60,7 @@ def save_agent_result(
 
 
 def update_job_status(job_id: str, status: str) -> None:
-    job_id = str(job_id).lstrip('=').strip()
+    job_id = _normalize_job_id(job_id)
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -51,7 +74,7 @@ def update_job_status(job_id: str, status: str) -> None:
 
 
 def get_job_status(job_id: str) -> dict | None:
-    job_id = str(job_id).lstrip('=').strip()
+    job_id = _normalize_job_id(job_id)
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -82,7 +105,7 @@ def get_job_status(job_id: str) -> dict | None:
 
 def get_job_data(job_id: str) -> dict | None:
     """Devuelve jira_issue y analyst_output de un job."""
-    job_id = str(job_id).lstrip('=').strip()
+    job_id = _normalize_job_id(job_id)
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -125,7 +148,7 @@ def save_decision(
     decided_by: str,
     rationale: str | None = None,
 ) -> None:
-    job_id = str(job_id).lstrip('=').strip()
+    job_id = _normalize_job_id(job_id)
     conn = _get_conn()
     try:
         with conn.cursor() as cur:

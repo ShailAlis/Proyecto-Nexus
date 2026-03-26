@@ -1,88 +1,84 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 
+import httpx
 from langchain_anthropic import ChatAnthropic
 from langchain_ollama import ChatOllama
 
 from db import save_agent_result
 from graph.state import NexusState
 
-REVIEW_PROMPT = """Eres un revisor experto del sistema NEXUS. Analiza los outputs del desarrollador y diseñador.
+logger = logging.getLogger("nexus.reviewer")
 
-Evalúa:
-- Calidad y corrección del código propuesto
-- Coherencia entre código y especificación de diseño
+REVIEW_PROMPT = """Eres un revisor experto del sistema NEXUS. Analiza los outputs del desarrollador y disenador.
+
+Evalua:
+- Calidad y correccion del codigo propuesto
+- Coherencia entre codigo y especificacion de diseno
 - Posibles problemas de seguridad, rendimiento o mantenibilidad
-- Alineación con los requisitos originales del analista
+- Alineacion con los requisitos originales del analista
 
-Responde en JSON válido:
-{{
+Responde en JSON valido:
+{
   "score": 0-100,
   "issues": ["..."],
   "suggestions": ["..."],
   "approved": true/false
-}}"""
+}"""
 
 
 def _build_context(state: NexusState) -> str:
     return (
         f"Issue Jira: {state['jira_issue']}\n\n"
-        f"Descripción original:\n{state['description']}\n\n"
+        f"Descripcion original:\n{state['description']}\n\n"
         f"Output del Analista:\n{json.dumps(state['analyst_output'], ensure_ascii=False)}\n\n"
         f"Output del Desarrollador:\n{json.dumps(state['developer_output'], ensure_ascii=False)}\n\n"
-        f"Output del Diseñador:\n{json.dumps(state['designer_output'], ensure_ascii=False)}"
+        f"Output del Disenador:\n{json.dumps(state['designer_output'], ensure_ascii=False)}"
     )
 
 
-def reviewer_node(state: NexusState) -> NexusState:
-    context = _build_context(state)
+def _extract_json(text: str) -> dict:
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+    if match:
+        return json.loads(match.group(1))
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    return {"score": 0, "issues": [], "suggestions": [], "approved": False}
 
+
+def reviewer_node(state: NexusState) -> NexusState:
+    print(f">>> [REVIEWER] Iniciando para job {state['job_id']}", flush=True)
+    print(">>> [REVIEWER] Llamando a deepseek-r1:14b...", flush=True)
+
+    context = _build_context(state)
     messages = [
         {"role": "system", "content": REVIEW_PROMPT},
         {"role": "user", "content": context},
     ]
 
-    # Revisión con Ollama (DeepSeek)
     ollama_llm = ChatOllama(
         model="deepseek-r1:14b",
         temperature=0.1,
         base_url="http://ollama:11434",
     )
-    def extract_json(text: str) -> dict:
-        # Elimina bloques <think>...</think> de deepseek-r1
-        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        # Busca bloque ```json ... ```
-        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        # Busca JSON directo { ... }
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        # Devuelve estructura por defecto si no encuentra JSON
-        return {
-            "score": 0,
-            "issues": [],
-            "suggestions": [],
-            "approved": False
-        }
-
     ollama_response = ollama_llm.invoke(messages)
-    ollama_review = extract_json(ollama_response.content)
+    ollama_review = _extract_json(ollama_response.content)
 
-    # Revisión con Anthropic (Claude)
+    print(">>> [REVIEWER] Llamando a claude-sonnet...", flush=True)
     anthropic_llm = ChatAnthropic(
         model="claude-sonnet-4-20250514",
         temperature=0.1,
         api_key=os.getenv("ANTHROPIC_API_KEY"),
     )
     anthropic_response = anthropic_llm.invoke(messages)
-    anthropic_review = extract_json(anthropic_response.content)
+    anthropic_review = _extract_json(anthropic_response.content)
 
-    # Comparar ambas revisiones
     consensus = ollama_review.get("approved") == anthropic_review.get("approved")
 
     discrepancies = []
@@ -119,11 +115,36 @@ def reviewer_node(state: NexusState) -> NexusState:
     )
 
     state["reviewer_output"] = output
-    state["current_agent"] = "approval_gate"
+    state["current_agent"] = "awaiting_approval"
+    state["approval_required"] = True
+    state["approval_type"] = "visual"
 
-    # Si no hay consenso, aprobación humana obligatoria
-    if not consensus:
-        state["approval_required"] = True
-        state["approval_type"] = "review_discrepancy"
+    try:
+        if not consensus:
+            summary = (
+                "Revision humana requerida por discrepancias entre modelos.\n\n"
+                f"Problemas detectados:\n"
+                f"{chr(10).join(str(item) for item in output.get('discrepancies', [])[:3]) or 'Sin detalles adicionales'}"
+            )
+        else:
+            summary = (
+                "Revision final lista para decision humana.\n\n"
+                f"Recomendacion automatica: {output.get('recommendation', 'review_required')}\n"
+                f"Score DeepSeek: {ollama_review.get('score', 'N/A')}\n"
+                f"Score Claude: {anthropic_review.get('score', 'N/A')}"
+            )
 
+        httpx.post(
+            "http://agents:8000/notify/approval-required",
+            json={
+                "job_id": state["job_id"],
+                "approval_type": "visual",
+                "summary": summary[:1500],
+            },
+            timeout=10,
+        )
+    except Exception:
+        logger.exception("No se pudo solicitar aprobacion humana para job %s", state["job_id"])
+
+    print(f">>> [REVIEWER] Completado - consenso: {output.get('consensus')}", flush=True)
     return state

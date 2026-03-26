@@ -1,4 +1,5 @@
-import asyncio
+from __future__ import annotations
+
 import dataclasses
 import json
 import logging
@@ -15,14 +16,31 @@ from intake import analyze_request
 load_dotenv()
 logger = logging.getLogger("nexus.discord")
 
+APPROVE_EMOJI = "✅"
+REJECT_EMOJI = "❌"
+ITERATE_EMOJI = "🔁"
+INTAKE_TTL_SECONDS = 60 * 60 * 24 * 7
+
+
+def _get_required_channel_id(env_name: str) -> int:
+    raw_value = os.getenv(env_name)
+    if not raw_value:
+        raise RuntimeError(f"La variable {env_name} es obligatoria")
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"La variable {env_name} debe ser un entero valido") from exc
+
+
+REQUEST_CHANNEL_ID = _get_required_channel_id("DISCORD_REQUESTS_CHANNEL_ID")
+APPROVAL_CHANNEL_ID = _get_required_channel_id("DISCORD_APPROVAL_CHANNEL_ID")
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 intents.members = True
 
 bot = discord.Client(intents=intents)
-REQUEST_CHANNEL_ID = int(os.getenv("DISCORD_REQUESTS_CHANNEL_ID", "0"))
-INTAKE_TTL_SECONDS = 60 * 60 * 24 * 7
 redis_client: redis.Redis | None = None
 
 
@@ -107,6 +125,22 @@ async def _get_session(thread_id: int) -> IntakeSession | None:
     return session
 
 
+async def _get_channel(channel_id: int):
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        channel = await bot.fetch_channel(channel_id)
+    if channel is None:
+        raise RuntimeError(f"No se pudo obtener el canal {channel_id}")
+    return channel
+
+
+def _extract_approval_type(message_content: str) -> str:
+    for line in message_content.splitlines():
+        if "**Tipo:**" in line:
+            return line.split("**Tipo:**", 1)[1].strip() or "architecture"
+    return "architecture"
+
+
 @bot.event
 async def on_ready():
     try:
@@ -129,35 +163,51 @@ async def _launch_job_from_session(thread: discord.Thread, session: IntakeSessio
     description = intake.get("refined_description") or ""
     summary = intake.get("summary") or issue
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://agents:8000/run",
-            json={
-                "job_id": str(uuid.uuid4()),
-                "jira_issue": issue,
-                "description": description,
-                "phase": "analysis",
-            },
-            timeout=20.0,
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://agents:8000/run",
+                json={
+                    "job_id": str(uuid.uuid4()),
+                    "jira_issue": issue,
+                    "description": description,
+                    "phase": "analysis",
+                },
+                timeout=20.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except Exception:
+        logger.exception("No se pudo lanzar el job desde intake")
+        await thread.send(
+            "He tenido un problema al arrancar el job. "
+            "No he perdido el contexto del hilo, asi que puedes intentar de nuevo en unos segundos."
         )
-        response.raise_for_status()
-        payload = response.json()
+        return
 
     session.launched = True
     session.job_id = payload["job_id"]
-    await _persist_session(session)
-
     await thread.send(
-        f"Perfecto. Ya tengo contexto suficiente para arrancar el análisis.\n\n"
+        f"Perfecto. Ya tengo contexto suficiente para arrancar el analisis.\n\n"
         f"**Job:** `{session.job_id}`\n"
-        f"**Título interpretado:** {issue}\n"
+        f"**Titulo interpretado:** {issue}\n"
         f"**Resumen:** {summary}"
     )
+    await _delete_session(thread.id)
 
 
 async def _continue_intake(thread: discord.Thread, session: IntakeSession) -> None:
     await _persist_session(session)
-    intake = analyze_request(session.transcript)
+    try:
+        intake = await analyze_request(session.transcript)
+    except Exception:
+        logger.exception("Fallo analizando la peticion en intake")
+        await thread.send(
+            "He tenido un problema analizando la peticion. "
+            "Voy a seguir disponible en este hilo; prueba a reformular el ultimo detalle."
+        )
+        return
+
     if intake.get("ready"):
         await _launch_job_from_session(thread, session, intake)
         return
@@ -166,11 +216,11 @@ async def _continue_intake(thread: discord.Thread, session: IntakeSession) -> No
     prefix = ""
     if missing:
         prefix = (
-            "Aún me faltan un par de detalles clave: "
+            "Aun me faltan un par de detalles clave: "
             + ", ".join(str(item) for item in missing[:3])
             + ".\n"
         )
-    await thread.send(prefix + str(intake.get("next_question") or "¿Puedes darme más contexto?"))
+    await thread.send(prefix + str(intake.get("next_question") or "¿Puedes darme mas contexto?"))
 
 
 @bot.event
@@ -190,13 +240,10 @@ async def on_message(message: discord.Message):
         await _continue_intake(message.channel, session)
         return
 
-    if message.channel.id != REQUEST_CHANNEL_ID:
+    if message.channel.id != REQUEST_CHANNEL_ID or not message.content.strip():
         return
 
-    if not message.content.strip():
-        return
-
-    print(f">>> Nueva petición detectada en canal de requests: {message.id}", flush=True)
+    print(f">>> Nueva peticion detectada en canal de requests: {message.id}", flush=True)
     thread = await message.create_thread(
         name=f"nexus-{message.author.display_name[:20]}-{str(message.id)[-4:]}",
         auto_archive_duration=1440,
@@ -212,7 +259,7 @@ async def on_message(message: discord.Message):
 
     await thread.send(
         f"{message.author.mention} voy a aclarar contigo los requisitos antes de lanzar el job. "
-        f"Te haré solo las preguntas imprescindibles."
+        "Te hare solo las preguntas imprescindibles."
     )
     await _continue_intake(thread, session)
 
@@ -221,48 +268,38 @@ async def on_message(message: discord.Message):
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     try:
         print(
-            f">>> Reacción detectada: {payload.emoji} en canal {payload.channel_id} "
-            f"por usuario {payload.user_id}",
+            f">>> Reaccion detectada: {payload.emoji} en canal {payload.channel_id} por usuario {payload.user_id}",
             flush=True,
         )
 
-        if bot.user is None:
-            print(">>> ERROR: bot.user es None", flush=True)
+        if bot.user is None or payload.user_id == bot.user.id:
             return
 
-        if payload.user_id == bot.user.id:
-            print(">>> Ignorando reacción del propio bot", flush=True)
+        if payload.channel_id != APPROVAL_CHANNEL_ID:
             return
 
-        approval_channel_id = int(os.getenv("DISCORD_APPROVAL_CHANNEL_ID", "0"))
-        if payload.channel_id != approval_channel_id:
-            return
-
-        channel = bot.get_channel(payload.channel_id)
-        if channel is None:
-            channel = await bot.fetch_channel(payload.channel_id)
-
+        channel = await _get_channel(payload.channel_id)
         message = await channel.fetch_message(payload.message_id)
 
-        from approval_handler import approve_job, reject_job, iterate_job, extract_job_id_from_message
+        from approval_handler import approve_job, extract_job_id_from_message, iterate_job, reject_job
 
         job_id = extract_job_id_from_message(message.content)
         if not job_id:
             print(">>> ERROR: job_id no encontrado en mensaje", flush=True)
             return
 
+        approval_type = _extract_approval_type(message.content)
         emoji = str(payload.emoji)
         print(f">>> Procesando emoji {emoji} para job {job_id}", flush=True)
 
-        if emoji == "✅":
-            await approve_job(job_id, str(payload.user_id), "architecture")
-        elif emoji == "❌":
+        if emoji == APPROVE_EMOJI:
+            await approve_job(job_id, str(payload.user_id), approval_type)
+        elif emoji == REJECT_EMOJI:
             await reject_job(job_id, str(payload.user_id), "Rechazado via Discord")
-        elif emoji == "🔁":
-            await iterate_job(job_id, str(payload.user_id), "Iteración solicitada via Discord")
+        elif emoji == ITERATE_EMOJI:
+            await iterate_job(job_id, str(payload.user_id), "Iteracion solicitada via Discord")
 
-        print(f">>> Acción completada para job {job_id}", flush=True)
-
+        print(f">>> Accion completada para job {job_id}", flush=True)
     except Exception as e:
         print(f">>> ERROR CRITICO en on_raw_reaction_add: {e}", flush=True)
         import traceback
@@ -271,43 +308,20 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 
 async def send_approval_request(job_id: str, approval_type: str, summary: str):
-    approval_channel_id = int(os.getenv("DISCORD_APPROVAL_CHANNEL_ID", "0"))
-    channel = bot.get_channel(approval_channel_id)
-
-    if not channel:
-        logger.error("Canal no encontrado: %s", approval_channel_id)
-        return
-
+    channel = await _get_channel(APPROVAL_CHANNEL_ID)
     message = await channel.send(
-        f"🔔 **NEXUS — Aprobación requerida**\n"
+        f"🔔 **NEXUS - Aprobacion requerida**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 **Job:** `{job_id}`\n"
-        f"🎯 **Tipo:** {approval_type}\n"
-        f"📝 **Resumen:** {summary}\n"
+        f"**Job:** `{job_id}`\n"
+        f"**Tipo:** {approval_type}\n"
+        f"**Resumen:** {summary}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"Reacciona para decidir:\n"
-        f"✅ Aprobar\n"
-        f"❌ Rechazar\n"
-        f"🔁 Iterar"
+        f"{APPROVE_EMOJI} Aprobar\n"
+        f"{REJECT_EMOJI} Rechazar\n"
+        f"{ITERATE_EMOJI} Iterar"
     )
-
-    await message.add_reaction("✅")
-    await message.add_reaction("❌")
-    await message.add_reaction("🔁")
-    logger.info("Mensaje de aprobación enviado para job %s", job_id)
-
-
-def run_bot_in_loop(loop: asyncio.AbstractEventLoop):
-    asyncio.set_event_loop(loop)
-    token = os.getenv("DISCORD_BOT_TOKEN")
-    if not token:
-        print(">>> ERROR: DISCORD_BOT_TOKEN no encontrado", flush=True)
-        return
-    print(">>> Iniciando bot Discord...", flush=True)
-    try:
-        loop.run_until_complete(bot.start(token))
-    except Exception as e:
-        print(f">>> ERROR bot Discord: {e}", flush=True)
-        import traceback
-
-        traceback.print_exc()
+    await message.add_reaction(APPROVE_EMOJI)
+    await message.add_reaction(REJECT_EMOJI)
+    await message.add_reaction(ITERATE_EMOJI)
+    logger.info("Mensaje de aprobacion enviado para job %s", job_id)

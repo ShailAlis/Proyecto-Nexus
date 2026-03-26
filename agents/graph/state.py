@@ -1,4 +1,4 @@
-from typing import TypedDict, Annotated
+from typing import Annotated, TypedDict
 
 
 class NexusState(TypedDict):
@@ -15,3 +15,4 @@ class NexusState(TypedDict):
     approval_type: Annotated[str, lambda x, y: y if y else x]
     error: Annotated[str | None, lambda x, y: y if y else x]
     phase: Annotated[str, lambda x, y: y if y else x]
+    iteration_comment: Annotated[str, lambda x, y: y if y else x]

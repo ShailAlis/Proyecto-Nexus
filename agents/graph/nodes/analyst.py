@@ -12,47 +12,49 @@ from graph.state import NexusState
 
 logger = logging.getLogger("nexus.analyst")
 
-SYSTEM_PROMPT = """Eres el Agente Analista de NEXUS, un sistema multiagente de desarrollo asistido por IA.
+SYSTEM_PROMPT = """Eres un arquitecto de software senior especializado en analisis tecnico.
+Tu trabajo es descomponer peticiones de desarrollo en tareas concretas y accionables.
 
-Tu responsabilidad es descomponer requisitos de negocio en especificaciones técnicas accionables.
+INSTRUCCIONES CRITICAS:
+- Debes responder UNICAMENTE con JSON valido, sin texto adicional.
+- Si la descripcion es vaga, infiere solo detalles tecnicos razonables.
+- NUNCA devuelvas campos vacios: usa valores por defecto utiles y conservadores.
+- Los subtasks deben ser tareas tecnicas concretas, especificas y ejecutables.
+- No inventes frameworks, lenguajes o arquitecturas no mencionadas en la peticion.
 
-Dado un issue de Jira con su descripción, debes producir:
-1. **subtasks**: Lista de subtareas técnicas concretas y atómicas.
-2. **affected_modules**: Módulos del sistema que se verán afectados.
-3. **complexity**: Estimación de complejidad (low, medium, high, critical).
-4. **scope**: Resumen del alcance del cambio.
-
-Responde SIEMPRE en JSON válido con esta estructura:
+FORMATO DE RESPUESTA OBLIGATORIO:
 {
-  "subtasks": ["..."],
-  "affected_modules": ["..."],
-  "complexity": "medium",
-  "scope": "..."
+  "subtasks": ["tarea tecnica concreta 1", "tarea tecnica concreta 2", "tarea tecnica concreta 3"],
+  "affected_modules": ["modulo1", "modulo2"],
+  "complexity": "low|medium|high|critical",
+  "scope": "descripcion clara del alcance tecnico, supuestos y limites"
 }"""
 
 
 def extract_json(text: str) -> dict:
     """Extrae JSON de la respuesta del modelo, limpiando tags <think> y bloques markdown."""
-    # Elimina bloques <think>...</think> de deepseek-r1
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    # Busca bloque ```json ... ```
-    match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
     if match:
         return json.loads(match.group(1))
-    # Busca JSON directo { ... }
-    match = re.search(r'\{.*\}', text, re.DOTALL)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
         return json.loads(match.group())
-    # Devuelve estructura por defecto si no encuentra JSON
     return {
         "subtasks": [],
         "affected_modules": [],
         "complexity": "medium",
-        "scope": text.strip()
+        "scope": text.strip(),
     }
 
 
 def analyst_node(state: NexusState) -> NexusState:
+    print(f">>> [ANALYST] Iniciando para job {state['job_id']}", flush=True)
+    print(f">>> [ANALYST] job_id: {state['job_id']}", flush=True)
+    print(f">>> [ANALYST] jira_issue: {state['jira_issue']}", flush=True)
+    print(f">>> [ANALYST] description: {state['description'][:200]}", flush=True)
+    print(">>> [ANALYST] Usando modelo deepseek-r1:14b", flush=True)
+
     llm = ChatOllama(
         model="deepseek-r1:14b",
         temperature=0.2,
@@ -63,10 +65,13 @@ def analyst_node(state: NexusState) -> NexusState:
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": (
-                f"Issue Jira: {state['jira_issue']}\n\n"
-                f"Descripción:\n{state['description']}"
-            ),
+            "content": f"""Analiza esta peticion de desarrollo y descomponla en tareas tecnicas:
+
+PETICION: {state['jira_issue']}
+DESCRIPCION: {state['description']}
+
+Genera un analisis tecnico detallado con subtareas especificas e implementables.
+Responde SOLO con el JSON, sin explicaciones adicionales.""",
         },
     ]
 
@@ -85,19 +90,18 @@ def analyst_node(state: NexusState) -> NexusState:
     state["analyst_output"] = output
     state["current_agent"] = "developer"
 
-    # Solicitar aprobación de arquitectura vía Discord
     try:
         httpx.post(
             "http://agents:8000/notify/approval-required",
             json={
                 "job_id": state["job_id"],
                 "approval_type": "architecture",
-                "summary": output.get("scope", "Análisis completado"),
+                "summary": output.get("scope", "Analisis completado"),
             },
             timeout=5,
         )
     except Exception:
-        logger.warning("No se pudo enviar notificación de aprobación para job %s", state["job_id"])
+        logger.warning("No se pudo enviar notificacion de aprobacion para job %s", state["job_id"])
 
+    print(f">>> [ANALYST] Completado para job {state['job_id']}", flush=True)
     return state
-

@@ -9,26 +9,34 @@ from langchain_anthropic import ChatAnthropic
 from db import save_agent_result
 from graph.state import NexusState
 
-SYSTEM_PROMPT = """Eres el Agente Diseñador de NEXUS, un sistema multiagente de desarrollo asistido por IA.
+SYSTEM_PROMPT = """Eres el Agente Disenador de NEXUS, un sistema multiagente de desarrollo asistido por IA.
 
-Tu responsabilidad es generar especificaciones de UI/UX basándote en las subtareas del Agente Analista.
+Tu responsabilidad es generar especificaciones de UI/UX basandote en las subtareas del Agente Analista.
 
-Dado el análisis previo, debes producir:
+Dado el analisis previo, debes producir:
 1. **components**: Lista de componentes UI afectados o nuevos.
-2. **visual_changes**: Descripción de cambios visuales necesarios.
-3. **design_tokens**: Tokens de diseño relevantes (colores, tipografías, espaciados).
+2. **visual_changes**: Descripcion de cambios visuales necesarios.
+3. **design_tokens**: Tokens de diseno relevantes (colores, tipografias, espaciados).
 4. **interaction_notes**: Notas sobre interacciones, animaciones o estados.
 
-Responde SIEMPRE en JSON válido con esta estructura:
+Responde SIEMPRE en JSON valido con esta estructura:
 {
   "components": ["..."],
   "visual_changes": ["..."],
   "design_tokens": {"colors": {}, "typography": {}, "spacing": {}},
   "interaction_notes": "..."
-}"""
+}
+
+Reglas:
+- Si la peticion no implica interfaz de usuario, devuelve cambios visuales minimos y explicalo en interaction_notes.
+- No inventes frameworks visuales ajenos al proyecto.
+- Mantente alineado con la descripcion original y con el analisis tecnico."""
 
 
 def designer_node(state: NexusState) -> NexusState:
+    print(f">>> [DESIGNER] Iniciando para job {state['job_id']}", flush=True)
+    print(">>> [DESIGNER] Usando modelo claude-sonnet-4-20250514", flush=True)
+
     llm = ChatAnthropic(
         model="claude-sonnet-4-20250514",
         temperature=0.3,
@@ -43,29 +51,26 @@ def designer_node(state: NexusState) -> NexusState:
             "role": "user",
             "content": (
                 f"Issue Jira: {state['jira_issue']}\n\n"
-                f"Descripción:\n{state['description']}\n\n"
-                f"Análisis del Agente Analista:\n{analyst}"
+                f"Descripcion:\n{state['description']}\n\n"
+                f"Feedback de iteracion:\n{state.get('iteration_comment', '') or 'Sin feedback adicional'}\n\n"
+                f"Analisis del Agente Analista:\n{analyst}"
             ),
         },
     ]
 
     def extract_json(text: str) -> dict:
-        # Elimina bloques <think>...</think> de deepseek-r1
-        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        # Busca bloque ```json ... ```
-        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
         if match:
             return json.loads(match.group(1))
-        # Busca JSON directo { ... }
-        match = re.search(r'\{.*\}', text, re.DOTALL)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
-        # Devuelve estructura por defecto si no encuentra JSON
         return {
             "components": [],
             "visual_changes": [],
             "design_tokens": {"colors": {}, "typography": {}, "spacing": {}},
-            "interaction_notes": text.strip()
+            "interaction_notes": text.strip(),
         }
 
     response = llm.invoke(messages)
@@ -80,4 +85,5 @@ def designer_node(state: NexusState) -> NexusState:
 
     state["designer_output"] = output
     state["current_agent"] = "reviewer"
+    print(f">>> [DESIGNER] Completado para job {state['job_id']}", flush=True)
     return state
