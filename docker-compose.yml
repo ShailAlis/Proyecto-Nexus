@@ -8,6 +8,7 @@ volumes:
   postgres_data:
   redis_data:
   n8n_data:
+  ollama_data:
 
 services:
   postgres:
@@ -84,6 +85,42 @@ services:
       retries: 5
       start_period: 40s
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - nexus-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  nexus-bot:
+    build:
+      context: ./agents
+      dockerfile: Dockerfile
+    container_name: nexus-bot
+    command: python bot_runner.py
+    env_file:
+      - .env
+    networks:
+      - nexus-net
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+
   agents:
     build:
       context: ./agents
@@ -106,10 +143,9 @@ services:
     networks:
       - nexus-net
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
+      - ollama
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 15s

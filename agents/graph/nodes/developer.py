@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
+import re
 
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 
 from db import save_agent_result
 from graph.state import NexusState
@@ -26,10 +26,10 @@ Responde SIEMPRE en JSON válido con esta estructura:
 
 
 def developer_node(state: NexusState) -> NexusState:
-    llm = ChatOpenAI(
-        model="gpt-4o",
+    llm = ChatOllama(
+        model="qwen2.5-coder:14b",
         temperature=0.2,
-        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url="http://ollama:11434",
     )
 
     analyst = json.dumps(state["analyst_output"], ensure_ascii=False)
@@ -46,14 +46,32 @@ def developer_node(state: NexusState) -> NexusState:
         },
     ]
 
+    def extract_json(text: str) -> dict:
+        # Elimina bloques <think>...</think> de deepseek-r1
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        # Busca bloque ```json ... ```
+        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        # Busca JSON directo { ... }
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        # Devuelve estructura por defecto si no encuentra JSON
+        return {
+            "files": [],
+            "tests": [],
+            "documentation": text.strip()
+        }
+
     response = llm.invoke(messages)
-    output = json.loads(response.content)
+    output = extract_json(response.content)
 
     save_agent_result(
         job_id=state["job_id"],
         agent_name="developer",
         output=output,
-        model_used="gpt-4o",
+        model_used="qwen2.5-coder:14b",
     )
 
     state["developer_output"] = output

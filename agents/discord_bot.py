@@ -24,32 +24,61 @@ async def on_ready():
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if payload.user_id == bot.user.id:
-        return
+    try:
+        print(f">>> Reacción detectada: {payload.emoji} en canal {payload.channel_id} por usuario {payload.user_id}", flush=True)
 
-    approval_channel_id = int(os.getenv("DISCORD_APPROVAL_CHANNEL_ID", "0"))
-    if payload.channel_id != approval_channel_id:
-        return
+        if bot.user is None:
+            print(">>> ERROR: bot.user es None", flush=True)
+            return
 
-    emoji = str(payload.emoji)
-    channel = bot.get_channel(payload.channel_id)
-    message = await channel.fetch_message(payload.message_id)
+        print(f">>> Bot user id: {bot.user.id}", flush=True)
 
-    from approval_handler import approve_job, reject_job, iterate_job, extract_job_id_from_message
-    job_id = extract_job_id_from_message(message.content)
+        if payload.user_id == bot.user.id:
+            print(">>> Ignorando reacción del propio bot", flush=True)
+            return
 
-    if not job_id:
-        logger.warning(f"No se encontró job_id en mensaje {payload.message_id}")
-        return
+        approval_channel_id = int(os.getenv("DISCORD_APPROVAL_CHANNEL_ID", "0"))
+        print(f">>> Canal aprobaciones configurado: {approval_channel_id}", flush=True)
 
-    logger.info(f"Reacción {emoji} detectada para job {job_id}")
+        if payload.channel_id != approval_channel_id:
+            print(f">>> Canal no coincide, ignorando", flush=True)
+            return
 
-    if emoji == "✅":
-        await approve_job(job_id, str(payload.user_id))
-    elif emoji == "❌":
-        await reject_job(job_id, str(payload.user_id), "Rechazado via Discord")
-    elif emoji == "🔁":
-        await iterate_job(job_id, str(payload.user_id), "Iteración solicitada via Discord")
+        print(f">>> Obteniendo canal y mensaje...", flush=True)
+        channel = bot.get_channel(payload.channel_id)
+
+        if channel is None:
+            print(f">>> ERROR: canal {payload.channel_id} no encontrado en caché", flush=True)
+            channel = await bot.fetch_channel(payload.channel_id)
+            print(f">>> Canal obtenido via fetch: {channel}", flush=True)
+
+        message = await channel.fetch_message(payload.message_id)
+        print(f">>> Mensaje obtenido: {message.content[:60]}", flush=True)
+
+        from approval_handler import approve_job, reject_job, iterate_job, extract_job_id_from_message
+        job_id = extract_job_id_from_message(message.content)
+        print(f">>> job_id extraído: {job_id}", flush=True)
+
+        if not job_id:
+            print(f">>> ERROR: job_id no encontrado en mensaje", flush=True)
+            return
+
+        emoji = str(payload.emoji)
+        print(f">>> Procesando emoji {emoji} para job {job_id}", flush=True)
+
+        if emoji == "✅":
+            await approve_job(job_id, str(payload.user_id), "architecture")
+        elif emoji == "❌":
+            await reject_job(job_id, str(payload.user_id), "Rechazado via Discord")
+        elif emoji == "🔁":
+            await iterate_job(job_id, str(payload.user_id), "Iteración solicitada via Discord")
+
+        print(f">>> Acción completada para job {job_id}", flush=True)
+
+    except Exception as e:
+        print(f">>> ERROR CRITICO en on_raw_reaction_add: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
 
 
 async def send_approval_request(job_id: str, approval_type: str, summary: str):

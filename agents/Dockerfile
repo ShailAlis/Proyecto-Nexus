@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir \
     redis \
     pydantic \
     langchain \
-    langchain-openai \
+    langchain-ollama \
     langchain-anthropic \
     langgraph \
     httpx

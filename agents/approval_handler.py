@@ -6,7 +6,7 @@ import re
 
 import httpx
 
-from db import save_decision, update_job_status
+from db import get_job_data, save_decision, update_job_status
 
 logger = logging.getLogger("nexus.approval")
 
@@ -38,27 +38,52 @@ async def _notify_n8n(job_id: str, status: str) -> None:
 
 async def _notify_channel(channel_env: str, message: str) -> None:
     """Envía un mensaje a un canal de Discord por su ID (variable de entorno)."""
-    from discord_bot import client
+    from discord_bot import bot
 
     channel_id = os.getenv(channel_env)
     if not channel_id:
         return
-    channel = client.get_channel(int(channel_id))
+    channel = bot.get_channel(int(channel_id))
     if channel:
         await channel.send(message)
 
 
-async def approve_job(job_id: str, decided_by: str = "unknown") -> None:
-    """Aprueba un job: actualiza BD, registra decisión, notifica n8n."""
+async def approve_job(job_id: str, user_id: str, approval_type: str = "architecture") -> None:
+    """Aprueba un job: actualiza BD, registra decisión, relanza grafo en phase=development."""
     update_job_status(job_id, "approved")
     save_decision(
         job_id=job_id,
-        decision_type="approved",
-        decided_by=decided_by,
+        decision_type=approval_type,
+        decided_by=user_id,
         rationale="Aprobado vía Discord",
     )
-    await _notify_n8n(job_id, "approved")
-    logger.info("Job %s aprobado por %s", job_id, decided_by)
+    logger.info("Job %s aprobado por %s (tipo: %s)", job_id, user_id, approval_type)
+
+    # Obtener datos del job para relanzar el grafo
+    job_data = get_job_data(job_id)
+    if not job_data:
+        logger.error("No se encontraron datos para job %s, no se puede relanzar", job_id)
+        return
+
+    # Relanzar grafo en phase=development
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://agents:8000/run",
+                json={
+                    "job_id": job_id,
+                    "jira_issue": job_data["jira_issue"],
+                    "description": job_data["analyst_output"].get("scope", ""),
+                    "phase": "development",
+                    "analyst_output": job_data["analyst_output"],
+                },
+                timeout=10,
+            )
+        logger.info("Grafo relanzado en phase=development para job %s", job_id)
+    except Exception:
+        logger.exception("Error relanzando grafo para job %s", job_id)
+
+    await _notify_n8n(job_id, approval_type)
 
 
 async def reject_job(
@@ -68,7 +93,7 @@ async def reject_job(
     update_job_status(job_id, "rejected")
     save_decision(
         job_id=job_id,
-        decision_type="rejected",
+        decision_type="architecture",
         decided_by=decided_by,
         rationale=reason,
     )
@@ -87,7 +112,7 @@ async def iterate_job(
     update_job_status(job_id, "pending")
     save_decision(
         job_id=job_id,
-        decision_type="iterate",
+        decision_type="architecture",
         decided_by=decided_by,
         rationale=comment,
     )
@@ -109,3 +134,6 @@ async def iterate_job(
         logger.exception("Error relanzando grafo para job %s", job_id)
 
     logger.info("Job %s enviado a iteración por %s: %s", job_id, decided_by, comment)
+
+
+

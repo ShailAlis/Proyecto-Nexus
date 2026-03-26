@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import threading
 import uuid
 
+import httpx
 import redis
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from db import get_job_status, save_decision, update_job_status
@@ -20,22 +20,6 @@ load_dotenv()
 logger = logging.getLogger("nexus.main")
 
 redis_client: redis.Redis | None = None
-_discord_thread: threading.Thread | None = None
-
-
-def _start_discord_bot() -> None:
-    print(">>> _start_discord_bot iniciado")
-    try:
-        from discord_bot import run_bot_in_loop
-        print(">>> Importado discord_bot OK")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        print(">>> Loop creado, arrancando...")
-        run_bot_in_loop(loop)
-    except Exception as e:
-        print(f">>> ERROR CRITICO: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 app = FastAPI(title="NEXUS Agents", version="0.1.0")
@@ -43,17 +27,9 @@ app = FastAPI(title="NEXUS Agents", version="0.1.0")
 
 @app.on_event("startup")
 async def startup_event():
-    print(">>> startup_event ejecutándose")
-    global _discord_thread, redis_client
+    global redis_client
     redis_client = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"))
-    token = os.getenv("DISCORD_BOT_TOKEN")
-    print(f">>> Token Discord presente: {bool(token)}")
-    if token:
-        _discord_thread = threading.Thread(target=_start_discord_bot, daemon=True)
-        _discord_thread.start()
-        print(">>> Discord thread lanzado")
-    else:
-        print(">>> Sin token Discord")
+    print(">>> startup_event: Redis conectado")
 
 
 # ---------- Schemas ----------
@@ -63,6 +39,8 @@ class RunRequest(BaseModel):
     job_id: str | None = None
     jira_issue: str
     description: str
+    phase: str = "analysis"
+    analyst_output: dict | None = None
 
 
 class RunResponse(BaseModel):
@@ -92,14 +70,16 @@ async def health():
 
 
 @app.post("/run", response_model=RunResponse)
-async def run(request: RunRequest, background_tasks: BackgroundTasks):
+async def run(request: RunRequest):
+    import asyncio
     job_id = request.job_id or str(uuid.uuid4())
+    print(f">>> /run recibido job_id={job_id}")
 
     initial_state: NexusState = {
         "job_id": job_id,
         "jira_issue": request.jira_issue,
         "description": request.description,
-        "analyst_output": {},
+        "analyst_output": request.analyst_output or {},
         "developer_output": {},
         "designer_output": {},
         "reviewer_output": {},
@@ -108,10 +88,14 @@ async def run(request: RunRequest, background_tasks: BackgroundTasks):
         "approval_required": False,
         "approval_type": "",
         "error": None,
+        "phase": request.phase,
     }
 
     update_job_status(job_id, "running")
-    background_tasks.add_task(run_graph, initial_state)
+    print(f">>> Job {job_id} registrado en BD, lanzando grafo...")
+
+    asyncio.ensure_future(run_graph(initial_state))
+    print(f">>> asyncio.ensure_future lanzado para {job_id}")
 
     return RunResponse(job_id=job_id, status="running")
 
@@ -144,18 +128,16 @@ async def webhook_callback(payload: CallbackPayload):
 
 @app.post("/notify/approval-required")
 async def notify_approval_required(notification: ApprovalNotification):
-    """Envía solicitud de aprobación al canal de Discord."""
-    from discord_bot import client, send_approval_request
+    """Envía solicitud de aprobación al bot de Discord via HTTP."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "http://nexus-bot:8001/notify",
+            json={
+                "job_id": notification.job_id,
+                "approval_type": notification.approval_type,
+                "summary": notification.summary,
+            },
+            timeout=10.0,
+        )
+    return {"status": "notified"}
 
-    if not client.is_ready():
-        raise HTTPException(status_code=503, detail="Discord bot not ready")
-
-    asyncio.run_coroutine_threadsafe(
-        send_approval_request(
-            job_id=notification.job_id,
-            approval_type=notification.approval_type,
-            summary=notification.summary,
-        ),
-        client.loop,
-    )
-    return {"sent": True, "job_id": notification.job_id}

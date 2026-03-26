@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import re
 
 import httpx
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 
 from db import save_agent_result
 from graph.state import NexusState
@@ -32,10 +32,10 @@ Responde SIEMPRE en JSON válido con esta estructura:
 
 
 def analyst_node(state: NexusState) -> NexusState:
-    llm = ChatOpenAI(
-        model="gpt-4o",
+    llm = ChatOllama(
+        model="deepseek-r1:14b",
         temperature=0.2,
-        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url="http://ollama:11434",
     )
 
     messages = [
@@ -49,14 +49,33 @@ def analyst_node(state: NexusState) -> NexusState:
         },
     ]
 
+    def extract_json(text: str) -> dict:
+        # Elimina bloques <think>...</think> de deepseek-r1
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        # Busca bloque ```json ... ```
+        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        # Busca JSON directo { ... }
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        # Devuelve estructura por defecto si no encuentra JSON
+        return {
+            "subtasks": [],
+            "affected_modules": [],
+            "complexity": "medium",
+            "scope": text.strip()
+        }
+
     response = llm.invoke(messages)
-    output = json.loads(response.content)
+    output = extract_json(response.content)
 
     save_agent_result(
         job_id=state["job_id"],
         agent_name="analyst",
         output=output,
-        model_used="gpt-4o",
+        model_used="deepseek-r1:14b",
     )
 
     state["analyst_output"] = output
@@ -65,7 +84,7 @@ def analyst_node(state: NexusState) -> NexusState:
     # Solicitar aprobación de arquitectura vía Discord
     try:
         httpx.post(
-            "http://localhost:8000/notify/approval-required",
+            "http://agents:8000/notify/approval-required",
             json={
                 "job_id": state["job_id"],
                 "approval_type": "architecture",
@@ -77,3 +96,4 @@ def analyst_node(state: NexusState) -> NexusState:
         logger.warning("No se pudo enviar notificación de aprobación para job %s", state["job_id"])
 
     return state
+

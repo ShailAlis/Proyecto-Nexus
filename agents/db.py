@@ -80,6 +80,45 @@ def get_job_status(job_id: str) -> dict | None:
         conn.close()
 
 
+def get_job_data(job_id: str) -> dict | None:
+    """Devuelve jira_issue, description (del analyst) y analyst_output de un job."""
+    job_id = str(job_id).lstrip('=').strip()
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Datos básicos del job
+            cur.execute(
+                "SELECT jira_issue FROM nexus_jobs WHERE job_id = %s",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            jira_issue = row[0]
+
+            # Output del analista
+            cur.execute(
+                """
+                SELECT output FROM nexus_agent_results
+                WHERE job_id = %s AND agent_name = 'analyst'
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (job_id,),
+            )
+            analyst_row = cur.fetchone()
+            analyst_output = analyst_row[0] if analyst_row else {}
+            if isinstance(analyst_output, str):
+                analyst_output = json.loads(analyst_output)
+
+            return {
+                "job_id": job_id,
+                "jira_issue": jira_issue,
+                "analyst_output": analyst_output,
+            }
+    finally:
+        conn.close()
+
+
 def save_decision(
     job_id: str,
     decision_type: str,

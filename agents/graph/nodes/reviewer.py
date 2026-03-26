@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 
 from db import save_agent_result
 from graph.state import NexusState
@@ -44,47 +45,66 @@ def reviewer_node(state: NexusState) -> NexusState:
         {"role": "user", "content": context},
     ]
 
-    # Revisión con OpenAI
-    openai_llm = ChatOpenAI(
-        model="gpt-4o",
+    # Revisión con Ollama (DeepSeek)
+    ollama_llm = ChatOllama(
+        model="deepseek-r1:14b",
         temperature=0.1,
-        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url="http://ollama:11434",
     )
-    openai_response = openai_llm.invoke(messages)
-    openai_review = json.loads(openai_response.content)
+    def extract_json(text: str) -> dict:
+        # Elimina bloques <think>...</think> de deepseek-r1
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        # Busca bloque ```json ... ```
+        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        # Busca JSON directo { ... }
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        # Devuelve estructura por defecto si no encuentra JSON
+        return {
+            "score": 0,
+            "issues": [],
+            "suggestions": [],
+            "approved": False
+        }
 
-    # Revisión con Anthropic
+    ollama_response = ollama_llm.invoke(messages)
+    ollama_review = extract_json(ollama_response.content)
+
+    # Revisión con Anthropic (Claude)
     anthropic_llm = ChatAnthropic(
         model="claude-sonnet-4-20250514",
         temperature=0.1,
         api_key=os.getenv("ANTHROPIC_API_KEY"),
     )
     anthropic_response = anthropic_llm.invoke(messages)
-    anthropic_review = json.loads(anthropic_response.content)
+    anthropic_review = extract_json(anthropic_response.content)
 
     # Comparar ambas revisiones
-    consensus = openai_review.get("approved") == anthropic_review.get("approved")
+    consensus = ollama_review.get("approved") == anthropic_review.get("approved")
 
     discrepancies = []
     if not consensus:
         discrepancies.append(
-            f"OpenAI approved={openai_review.get('approved')}, "
+            f"DeepSeek approved={ollama_review.get('approved')}, "
             f"Anthropic approved={anthropic_review.get('approved')}"
         )
 
-    openai_issues = set(openai_review.get("issues", []))
+    ollama_issues = set(ollama_review.get("issues", []))
     anthropic_issues = set(anthropic_review.get("issues", []))
-    only_openai = openai_issues - anthropic_issues
-    only_anthropic = anthropic_issues - openai_issues
-    if only_openai:
-        discrepancies.append(f"Issues solo OpenAI: {list(only_openai)}")
+    only_ollama = ollama_issues - anthropic_issues
+    only_anthropic = anthropic_issues - ollama_issues
+    if only_ollama:
+        discrepancies.append(f"Issues solo DeepSeek: {list(only_ollama)}")
     if only_anthropic:
         discrepancies.append(f"Issues solo Anthropic: {list(only_anthropic)}")
 
-    recommendation = "approve" if consensus and openai_review.get("approved") else "review_required"
+    recommendation = "approve" if consensus and ollama_review.get("approved") else "review_required"
 
     output = {
-        "openai_review": openai_review,
+        "ollama_review": ollama_review,
         "anthropic_review": anthropic_review,
         "consensus": consensus,
         "discrepancies": discrepancies,
@@ -95,7 +115,7 @@ def reviewer_node(state: NexusState) -> NexusState:
         job_id=state["job_id"],
         agent_name="reviewer",
         output=output,
-        model_used="gpt-4o+claude-sonnet",
+        model_used="deepseek-r1:14b+claude-sonnet",
     )
 
     state["reviewer_output"] = output

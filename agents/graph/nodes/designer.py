@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
-from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 
 from db import save_agent_result
 from graph.state import NexusState
@@ -28,10 +29,10 @@ Responde SIEMPRE en JSON válido con esta estructura:
 
 
 def designer_node(state: NexusState) -> NexusState:
-    llm = ChatOpenAI(
-        model="gpt-4o",
+    llm = ChatAnthropic(
+        model="claude-sonnet-4-20250514",
         temperature=0.3,
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
     )
 
     analyst = json.dumps(state["analyst_output"], ensure_ascii=False)
@@ -48,14 +49,33 @@ def designer_node(state: NexusState) -> NexusState:
         },
     ]
 
+    def extract_json(text: str) -> dict:
+        # Elimina bloques <think>...</think> de deepseek-r1
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        # Busca bloque ```json ... ```
+        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        # Busca JSON directo { ... }
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        # Devuelve estructura por defecto si no encuentra JSON
+        return {
+            "components": [],
+            "visual_changes": [],
+            "design_tokens": {"colors": {}, "typography": {}, "spacing": {}},
+            "interaction_notes": text.strip()
+        }
+
     response = llm.invoke(messages)
-    output = json.loads(response.content)
+    output = extract_json(response.content)
 
     save_agent_result(
         job_id=state["job_id"],
         agent_name="designer",
         output=output,
-        model_used="gpt-4o",
+        model_used="claude-sonnet-4-20250514",
     )
 
     state["designer_output"] = output
