@@ -1,5 +1,4 @@
 from typing import TypedDict, Annotated
-import operator
 
 
 class NexusState(TypedDict):

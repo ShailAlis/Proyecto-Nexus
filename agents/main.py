@@ -71,7 +71,6 @@ async def health():
 
 @app.post("/run", response_model=RunResponse)
 async def run(request: RunRequest):
-    import asyncio
     job_id = request.job_id or str(uuid.uuid4())
     print(f">>> /run recibido job_id={job_id}")
 
@@ -130,7 +129,7 @@ async def webhook_callback(payload: CallbackPayload):
 async def notify_approval_required(notification: ApprovalNotification):
     """Envía solicitud de aprobación al bot de Discord via HTTP."""
     async with httpx.AsyncClient() as client:
-        response = await client.post(
+        await client.post(
             "http://nexus-bot:8001/notify",
             json={
                 "job_id": notification.job_id,

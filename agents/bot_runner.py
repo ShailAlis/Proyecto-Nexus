@@ -1,12 +1,12 @@
-import asyncio
-import os
 import sys
-sys.stdout.reconfigure(line_buffering=True)
-os.environ['PYTHONUNBUFFERED'] = '1'
+import os
+import asyncio
 
 from aiohttp import web
 from dotenv import load_dotenv
 load_dotenv()
+
+os.environ['PYTHONUNBUFFERED'] = '1'
 
 from discord_bot import bot, send_approval_request
 

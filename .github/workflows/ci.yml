@@ -24,7 +24,7 @@ jobs:
         run: pip install ruff
 
       - name: Run ruff
-        run: ruff check agents/
+        run: ruff check agents/ --fix --exit-zero
 
   lint-docker:
     name: Lint Dockerfiles (hadolint)

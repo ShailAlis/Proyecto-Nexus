@@ -41,10 +41,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         print(f">>> Canal aprobaciones configurado: {approval_channel_id}", flush=True)
 
         if payload.channel_id != approval_channel_id:
-            print(f">>> Canal no coincide, ignorando", flush=True)
+            print(">>> Canal no coincide, ignorando", flush=True)
             return
 
-        print(f">>> Obteniendo canal y mensaje...", flush=True)
+        print(">>> Obteniendo canal y mensaje...", flush=True)
         channel = bot.get_channel(payload.channel_id)
 
         if channel is None:
@@ -60,7 +60,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         print(f">>> job_id extraído: {job_id}", flush=True)
 
         if not job_id:
-            print(f">>> ERROR: job_id no encontrado en mensaje", flush=True)
+            print(">>> ERROR: job_id no encontrado en mensaje", flush=True)
             return
 
         emoji = str(payload.emoji)
