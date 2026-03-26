@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 
+import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 load_dotenv()
@@ -21,9 +22,26 @@ async def handle_approval(request):
     return web.Response(text="ok")
 
 
+async def handle_process_request(request):
+    data = await request.json()
+    print(f">>> Procesando petición: {data.get('content', '')[:80]}", flush=True)
+
+    # Llamar a n8n webhook para procesar la petición
+    n8n_url = os.getenv("N8N_WEBHOOK_URL_REQUESTS", "http://n8n:5678/webhook/nexus-new-request")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(n8n_url, json=data) as resp:
+                print(f">>> n8n respondió: {resp.status}", flush=True)
+    except Exception as e:
+        print(f">>> ERROR enviando a n8n: {e}", flush=True)
+
+    return web.Response(text="ok")
+
+
 async def start_web_server():
     app = web.Application()
     app.router.add_post("/notify", handle_approval)
+    app.router.add_post("/process-request", handle_process_request)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8001)

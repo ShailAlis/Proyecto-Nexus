@@ -81,6 +81,40 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         traceback.print_exc()
 
 
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+
+    requests_channel_id = int(os.getenv("DISCORD_REQUESTS_CHANNEL_ID", "0"))
+    if message.channel.id != requests_channel_id:
+        return
+
+    # Mensaje recibido en #nexus-requests
+    print(f">>> Nueva petición en #nexus-requests: {message.content[:80]}", flush=True)
+
+    # Confirmar recepción al usuario
+    await message.add_reaction("\u23f3")
+
+    # Enviar a bot_runner para procesar
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://nexus-bot:8001/process-request",
+                json={
+                    "content": message.content,
+                    "author": str(message.author),
+                    "author_id": str(message.author.id),
+                    "message_id": str(message.id),
+                    "channel_id": str(message.channel.id),
+                },
+                timeout=10.0,
+            )
+    except Exception as e:
+        print(f">>> ERROR enviando petición a bot_runner: {e}", flush=True)
+
+
 async def send_approval_request(job_id: str, approval_type: str, summary: str):
     approval_channel_id = int(os.getenv("DISCORD_APPROVAL_CHANNEL_ID", "0"))
     channel = bot.get_channel(approval_channel_id)

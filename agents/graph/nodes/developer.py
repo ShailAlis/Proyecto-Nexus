@@ -26,6 +26,9 @@ Responde SIEMPRE en JSON válido con esta estructura:
 
 
 def developer_node(state: NexusState) -> NexusState:
+    print(f">>> [DEVELOPER] Iniciando para job {state['job_id']}", flush=True)
+    print(f">>> [DEVELOPER] Usando modelo qwen2.5-coder:14b", flush=True)
+
     llm = ChatOllama(
         model="qwen2.5-coder:14b",
         temperature=0.2,
@@ -74,6 +77,17 @@ def developer_node(state: NexusState) -> NexusState:
         model_used="qwen2.5-coder:14b",
     )
 
+    try:
+        from db import get_job_epic_key
+        from jira_client import post_results_comment
+        epic_key = get_job_epic_key(state["job_id"])
+        if epic_key:
+            post_results_comment(epic_key, "Desarrollador", "qwen2.5-coder:14b", output)
+            print(f">>> Resultados Dev publicados en Jira {epic_key}", flush=True)
+    except Exception as e:
+        print(f">>> Error publicando en Jira: {e}", flush=True)
+
     state["developer_output"] = output
     state["current_agent"] = "reviewer"
+    print(f">>> [DEVELOPER] Completado para job {state['job_id']}", flush=True)
     return state

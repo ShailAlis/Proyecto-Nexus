@@ -29,6 +29,9 @@ Responde SIEMPRE en JSON válido con esta estructura:
 
 
 def designer_node(state: NexusState) -> NexusState:
+    print(f">>> [DESIGNER] Iniciando para job {state['job_id']}", flush=True)
+    print(f">>> [DESIGNER] Usando modelo claude-sonnet-4-20250514", flush=True)
+
     llm = ChatAnthropic(
         model="claude-sonnet-4-20250514",
         temperature=0.3,
@@ -78,6 +81,17 @@ def designer_node(state: NexusState) -> NexusState:
         model_used="claude-sonnet-4-20250514",
     )
 
+    try:
+        from db import get_job_epic_key
+        from jira_client import post_results_comment
+        epic_key = get_job_epic_key(state["job_id"])
+        if epic_key:
+            post_results_comment(epic_key, "Diseñador", "claude-sonnet-4-20250514", output)
+            print(f">>> Resultados Diseñador publicados en Jira {epic_key}", flush=True)
+    except Exception as e:
+        print(f">>> Error publicando en Jira: {e}", flush=True)
+
     state["designer_output"] = output
     state["current_agent"] = "reviewer"
+    print(f">>> [DESIGNER] Completado para job {state['job_id']}", flush=True)
     return state

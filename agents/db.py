@@ -13,6 +13,24 @@ def _get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 
+def create_job(job_id: str, jira_issue: str, trigger_type: str = "manual") -> None:
+    job_id = str(job_id).lstrip('=').strip()
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO nexus_jobs (job_id, jira_issue, status, trigger_type)
+                VALUES (%s, %s, 'pending', %s)
+                ON CONFLICT (job_id) DO NOTHING
+                """,
+                (job_id, jira_issue, trigger_type),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def save_agent_result(
     job_id: str,
     agent_name: str,
@@ -137,5 +155,26 @@ def save_decision(
                 (job_id, decision_type, rationale, decided_by),
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_job_epic_key(job_id: str) -> str | None:
+    """Obtiene el epic_key de Jira asociado a un job."""
+    job_id = str(job_id).lstrip('=').strip()
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT output->>'jira_epic_key'
+                FROM nexus_agent_results
+                WHERE job_id = %s AND agent_name = 'analyst'
+                LIMIT 1
+                """,
+                (job_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
     finally:
         conn.close()
