@@ -31,6 +31,27 @@ Responde SIEMPRE en JSON válido con esta estructura:
 }"""
 
 
+def extract_json(text: str) -> dict:
+    """Extrae JSON de la respuesta del modelo, limpiando tags <think> y bloques markdown."""
+    # Elimina bloques <think>...</think> de deepseek-r1
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # Busca bloque ```json ... ```
+    match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+    if match:
+        return json.loads(match.group(1))
+    # Busca JSON directo { ... }
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    # Devuelve estructura por defecto si no encuentra JSON
+    return {
+        "subtasks": [],
+        "affected_modules": [],
+        "complexity": "medium",
+        "scope": text.strip()
+    }
+
+
 def analyst_node(state: NexusState) -> NexusState:
     llm = ChatOllama(
         model="deepseek-r1:14b",
@@ -48,25 +69,6 @@ def analyst_node(state: NexusState) -> NexusState:
             ),
         },
     ]
-
-    def extract_json(text: str) -> dict:
-        # Elimina bloques <think>...</think> de deepseek-r1
-        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        # Busca bloque ```json ... ```
-        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        # Busca JSON directo { ... }
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        # Devuelve estructura por defecto si no encuentra JSON
-        return {
-            "subtasks": [],
-            "affected_modules": [],
-            "complexity": "medium",
-            "scope": text.strip()
-        }
 
     response = llm.invoke(messages)
     output = extract_json(response.content)

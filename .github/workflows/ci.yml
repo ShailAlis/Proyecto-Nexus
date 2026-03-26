@@ -53,11 +53,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e "agents/[dev]" 2>/dev/null || true
-          pip install pytest pytest-cov pytest-asyncio
-          pip install -r agents/requirements.txt 2>/dev/null || true
-          cd agents && pip install -e ".[dev]" 2>/dev/null || pip install . 2>/dev/null || true
+          pip install pytest pytest-cov pytest-asyncio \
+            langchain langchain-anthropic langchain-ollama \
+            langgraph psycopg2-binary redis pydantic \
+            python-dotenv httpx aiohttp discord.py
 
       - name: Run pytest with coverage
         run: |
