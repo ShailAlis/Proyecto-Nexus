@@ -81,7 +81,7 @@ def get_job_status(job_id: str) -> dict | None:
 
 
 def get_job_data(job_id: str) -> dict | None:
-    """Devuelve jira_issue, description (del analyst) y analyst_output de un job."""
+    """Devuelve jira_issue y analyst_output de un job."""
     job_id = str(job_id).lstrip('=').strip()
     conn = _get_conn()
     try:

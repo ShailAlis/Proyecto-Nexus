@@ -72,6 +72,8 @@ def analyst_node(state: NexusState) -> NexusState:
 
     response = llm.invoke(messages)
     output = extract_json(response.content)
+    output["original_description"] = state["description"]
+    output["original_jira_issue"] = state["jira_issue"]
 
     save_agent_result(
         job_id=state["job_id"],

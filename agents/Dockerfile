@@ -13,7 +13,6 @@ RUN pip install --no-cache-dir \
     redis==5.2.0 \
     pydantic==2.9.2 \
     langchain==0.3.7 \
-    langchain-openai==0.2.9 \
     langchain-anthropic==0.3.0 \
     langchain-ollama==0.2.0 \
     langgraph==0.2.53 \

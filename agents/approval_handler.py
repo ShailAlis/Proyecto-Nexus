@@ -101,13 +101,17 @@ async def approve_job(job_id: str, user_id: str, approval_type: str = "architect
     if approval_type == "architecture":
         # Aprobación de análisis → relanzar grafo en phase=development
         try:
+            original_description = (
+                job_data["analyst_output"].get("original_description")
+                or job_data["analyst_output"].get("scope", "")
+            )
             async with httpx.AsyncClient() as client:
                 await client.post(
                     "http://agents:8000/run",
                     json={
                         "job_id": job_id,
                         "jira_issue": job_data["jira_issue"],
-                        "description": job_data["analyst_output"].get("scope", ""),
+                        "description": original_description,
                         "phase": "development",
                         "analyst_output": job_data["analyst_output"],
                     },
@@ -160,7 +164,7 @@ async def iterate_job(
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
-                "http://localhost:8000/webhook/callback",
+                "http://agents:8000/webhook/callback",
                 json={
                     "job_id": job_id,
                     "result": {"iterate_comment": comment},
@@ -173,6 +177,5 @@ async def iterate_job(
         logger.exception("Error relanzando grafo para job %s", job_id)
 
     logger.info("Job %s enviado a iteración por %s: %s", job_id, decided_by, comment)
-
 
 

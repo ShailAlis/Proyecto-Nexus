@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from db import get_job_status, save_decision, update_job_status
+from db import create_job, get_job_status, save_decision, update_job_status
 from graph.graph import run_graph
 from graph.state import NexusState
 

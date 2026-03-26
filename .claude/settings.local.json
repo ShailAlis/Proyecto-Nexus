@@ -4,7 +4,10 @@
       "Bash(mkdir -p \"C:/Users/drx40/Desktop/Proyecto Nexus/infra/n8n\")",
       "Bash(touch \"C:/Users/drx40/Desktop/Proyecto Nexus/infra/n8n/.gitkeep\")",
       "Bash(pip install:*)",
-      "Bash(find 'C:\\\\Users\\\\drx40\\\\Desktop\\\\Proyecto Nexus\\\\agents' -name *.py -type f)"
+      "Bash(find 'C:\\\\Users\\\\drx40\\\\Desktop\\\\Proyecto Nexus\\\\agents' -name *.py -type f)",
+      "Bash(python3 -m py_compile graph/graph.py)",
+      "Bash(python3 -c \":*)",
+      "Bash(python3:*)"
     ]
   }
 }
